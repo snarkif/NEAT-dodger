@@ -141,7 +141,7 @@ def randomPolygon():
  
  
 
-def IsPolyInBoundaries(shape):
+def IsPolyInBoundaries(shape):#checks if a polygon is in bounds
  
   points = [shape.body.local_to_world(v) for v in shape.get_vertices()]
   for point in points:
@@ -150,7 +150,7 @@ def IsPolyInBoundaries(shape):
     
   return False
   
-def polyInbounds(shape):
+def polyInbounds(shape):#checks if a polygon is out of bounds,but specificly after it was alrdy in the bounds
    if (shape in shapeDict)==False and IsPolyInBoundaries(shape)==False:
     shapeDict[shape]=True
    
@@ -203,7 +203,7 @@ while running:
    
     s.step(dt)#60 steps per frame
 
-    if spawnPoly==frame:
+    if spawnPoly==frame:#controls when the polygons are created randomly
       spawnPoly=random.randint(1,60)+frame
       bod, shape = randomPolygon()
 
@@ -252,3 +252,4 @@ while running:
     clock.tick(FPS)
 
 pygame.quit()
+
