@@ -1,255 +1,212 @@
 import pymunk
 import pygame
 import random
-print("Pymunk version:", pymunk.version)
-#FPS
-FPS=60
+import neat
+import os
+import math
+import pickle
 
-# create space
-s = pymunk.Space()
+# --- CONSTANTS ---
+FPS = 60
+WIDTH, HEIGHT = 800, 800
+SHOW_GRAPHICS = False 
+NUM_RAYS = 8          
+SENSE_DIST = 350      # Increased so bot sees danger earlier
 
-# create the body for the sprite
-b = pymunk.Body(body_type=pymunk.Body.KINEMATIC)
-b.position = (100, 100)
-b.velocity = (50, 20)
-
-#create a list of the bodies and shapes  besides the sprite
-bodies=[]
-shapes=[]
-shapeDict={}
-
-# create the sprite shape
-c = pymunk.Circle(b, 10)
-c.collision_type=1
-c.sensor = True
-c.collision_type = 1
-s.add(b, c)
-
-# pygame setup
-global width
-width=800
-
-global height
-height=800
-
-pygame.init()
-screen = pygame.display.set_mode((width, height))
-clock = pygame.time.Clock()
-running = True
-
-#create some examplery polygons
-triangle = [
-    (0, 0),
-    (60, 0),
-    (30, 50)
-]
-pentagon = [
-    (0, 30),
-    (25, 0),
-    (60, 15),
-    (55, 50),
-    (15, 60)
-]
-quad = [
-    (0, 0),
-    (70, 10),
-    (50, 60),
-    (10, 50)
-]
-hexagon = [
-    (20, 0),
-    (60, 0),
-    (80, 30),
-    (60, 60),
-    (20, 60),
-    (0, 30)
-]
-
-polyList=[triangle,pentagon,quad,hexagon]
-
-
-for i in range(4):
-    body = pymunk.Body(body_type=pymunk.Body.KINEMATIC)
-    body.position = (random.randint(100, 700), random.randint(100, 700))
-    body.velocity = (random.randint(5, 200), random.randint(5, 200))
-
-    shape = pymunk.Poly(body, polyList[i])
-    shape.sensor=False
-
-    s.add(body, shape)
-
-    bodies.append(body)
-    shapes.append(shape)
-
-
-
-#creating random polygons
-
-def randomPolygon():
-  lip=random.randint(1,4)#which lip should the polygon spawn near
-  ver=random.randint(2,5)#randomly choose the amount of vertices of the polygon
-  maxX=0
-  maxY=0
-  minX=100#max x size
-  minY=100#max y size
-  p1=(maxX,0)
-  p2=(0,maxY)
-  p3=(minX,0)
-  p4=(0,maxY)
-  offsetPoint=(0,0)
- 
-  MARGIN=50
-  
-  
+def get_inputs(bot_body, bot_vel, hazards, space):
+    # NEW: Boundary Distance Inputs (Normalized 0 to 1)
+    # 0.0 means touching the wall, 1.0 means at the far opposite side
+    dist_left = bot_body.position.x / WIDTH
+    dist_right = (WIDTH - bot_body.position.x) / WIDTH
+    dist_top = bot_body.position.y / HEIGHT
+    dist_bottom = (HEIGHT - bot_body.position.y) / HEIGHT
     
+    wall_data = [dist_left, dist_right, dist_top, dist_bottom]
+    # 1. Raycasting (8 inputs)
+    sensors = []
+    for i in range(NUM_RAYS):
+        angle = (math.pi * 2 / NUM_RAYS) * i
+        ray_vec = pymunk.Vec2d(math.cos(angle), math.sin(angle))
+        start = bot_body.position
+        end = start + ray_vec * SENSE_DIST
+        info = space.segment_query_first(start, end, 1, pymunk.ShapeFilter())
+        sensors.append(info.alpha if info else 1.0)
     
+    # 2. Sort hazards and prepare relative data
+    hazards.sort(key=lambda h: (h.body.position - bot_body.position).length)
     
-  points=[]
-  points.append(offsetPoint)#body positioning will be relative to (0,0)
-  for i in range(ver+1):
-    p=(random.randint(0,minX),random.randint(0,minY))
-    points.append(p)
-    if p[0]>p1[0]:
-      p1=p
-    if p[0]<p3[0]:
-      p3=p
-    if p[1]>p1[1]:
-      p1=p
-    if p[1]<p3[1]:
-      p3=p
-   
-  body=pymunk.Body(body_type=pymunk.Body.KINEMATIC)
-  shape = pymunk.Poly(body, points)
+    h_data = [0.0] * 8 
+    dot_products = [0.0, 0.0]
+    pincer_risk = 0.0
+    rel_vectors = []
 
+    for i in range(min(len(hazards), 2)):
+        h = hazards[i]
+        # Relative Vector normalized by SENSE_DIST
+        rel = (h.body.position - bot_body.position) / SENSE_DIST
+        rel_vectors.append(rel)
+        
+        idx = i * 4
+        h_data[idx] = max(-1.0, min(1.0, rel.x))
+        h_data[idx+1] = max(-1.0, min(1.0, rel.y))
+        h_data[idx+2] = h.body.velocity.x / 200
+        h_data[idx+3] = h.body.velocity.y / 200
+        
+        # 3. Dot Product: Directional Danger
+        if bot_vel.length > 0:
+            # Normalized bot_vel dot relative_pos_to_hazard
+            dot_products[i] = bot_vel.normalized().dot(rel.normalized())
 
-  if lip == 1:# spawn to the RIGHT of screen, move left
-        body.position = (width + MARGIN - p3[0], random.randint(0, height))
-        body.velocity = (random.randint(-100, -20), random.randint(-40, 40))
-  if lip == 2:# spawn ABOVE screen, move down
-        body.position = (random.randint(0, width), -MARGIN - p2[1])
-        body.velocity = (random.randint(-40, 40), random.randint(50, 200))
-  if lip == 3:# spawn to the LEFT of screen, move right
-        body.position = (-MARGIN - p1[1], random.randint(0, height))
-        body.velocity = (random.randint(20, 100), random.randint(-40, 40))
-  if lip==4:# lip == 4, spawn BELOW screen, move up
-        body.position = (random.randint(0, width), height + MARGIN - p4[1])
-        body.velocity = (random.randint(-40, 40), random.randint(-200, -50))
+    # 4. Cross Product: Are hazards pinning the bot?
+    if len(rel_vectors) == 2:
+        pincer_risk = abs(rel_vectors[0].cross(rel_vectors[1]))
 
-  shape.collision_type=2
+    # 5. Normalized Bot Position
+    bot_pos_data = [bot_body.position.x / WIDTH, bot_body.position.y / HEIGHT]
 
-  return (body,shape)
- 
- 
+    # Total = 8 (rays) + 8 (hazards) + 2 (pos) + 2 (dots) + 1 (cross) = 21
+    return sensors + h_data + bot_pos_data + dot_products + [pincer_risk]+wall_data
 
-def IsPolyInBoundaries(shape):#checks if a polygon is in bounds
- 
-  points = [shape.body.local_to_world(v) for v in shape.get_vertices()]
-  for point in points:
-    if (point[0]>0 and point[0]<800) and (point[1]>0 and point[1]<800):
-      return True
+def eval_genomes(genomes, config):
+    for genome_id, genome in genomes:
+        net = neat.nn.FeedForwardNetwork.create(genome, config)
+        genome.fitness = 0
+        
+        s = pymunk.Space()
+        
+        # Static walls so raycasts "see" the edges
+        static_lines = [
+            pymunk.Segment(s.static_body, (0, 0), (WIDTH, 0), 1),
+            pymunk.Segment(s.static_body, (0, HEIGHT), (WIDTH, HEIGHT), 1),
+            pymunk.Segment(s.static_body, (0, 0), (0, HEIGHT), 1),
+            pymunk.Segment(s.static_body, (WIDTH, 0), (WIDTH, HEIGHT), 1)
+        ]
+        for line in static_lines:
+            line.sensor = True
+            s.add(line)
+
+        b = pymunk.Body(body_type=pymunk.Body.KINEMATIC)
+        b.position = (WIDTH/2, HEIGHT/2)
+        c = pymunk.Circle(b, 12)
+        s.add(b, c)
+        
+        hazards = []
+        running = True
+        spawn_timer = 0
+        dt = 1/FPS
+        
+        # Tracking for Jitter and Rewards
+        current_vel = pymunk.Vec2d(0, 0)
+        prev_dist_to_hazards = {} # To track if we are getting further away
+
+        for frame_count in range(5000):
+            if not running: break
+            
+            # 1. GET INPUTS & THINK
+            inputs = get_inputs(b, current_vel, hazards, s)
+            output = net.activate(inputs)
+            
+            # 2. DIRECT VELOCITY OUTPUT (2 Outputs: -1 to 1)
+            # Ensure your config has num_outputs = 2
+            target_vx = output[0] * 450 
+            target_vy = output[1] * 450
+            new_vel = pymunk.Vec2d(target_vx, target_vy)
+            
+            # 3. JITTER PENALTY (Check change in velocity)
+            accel = (new_vel - current_vel).length
+            genome.fitness -= (accel / 500) * 0.1 # Punish jerky changes
+
+            # Update state
+            current_vel = pymunk.Vec2d(target_vx, target_vy)
+            b.position += current_vel * dt
+
+            #3.2 getting too close to the walls penalty
+            if b.position.x<40.0 or b.position.x>(WIDTH-40.0) or b.position.y<40.0 or b.position.y>(HEIGHT-40.0):
+                genome.fitness-=1.2
+
+            # 4. BOUNDARY & CENTER LOGIC
+            b.position = (max(20, min(WIDTH-20, b.position.x)), max(20, min(HEIGHT-20, b.position.y)))
+            
+            # Survival Base
+            genome.fitness += 1
+
+            # 1. MOVEMENT REWARD: Reward velocity, but not jitter
+            # This stops it from sitting in the center.
+            if current_vel.length > 50:
+                genome.fitness += 0.2
+
+            # 3. PROXIMITY PENALTY & DODGE REWARD
+            if hazards:
+                total_proximity_pressure = 0
+                for i, h in enumerate(hazards[:3]): # Check closest 3
+                    dist = (h.body.position - b.position).length
+                    
+                    # A. The "Hot Stove" Penalty
+                    # If within 100px, lose fitness exponentially
+                    if dist < 120:
+                        # The closer it is, the more fitness we lose
+                        proximity_loss = (120 - dist) / 100
+                        total_proximity_pressure += proximity_loss
+                        genome.fitness -= total_proximity_pressure * 2.0
+
+                    # B. The Dodge Reward
+                    # Only reward moving away if the object is actually a threat (< 200px)
+                    if i in prev_dist_to_hazards and dist < 200:
+                        if dist > prev_dist_to_hazards[i] + 0.2:
+                            # Big reward for active dodging
+                            genome.fitness += 2
+                    
+                    prev_dist_to_hazards[i] = dist
+            # --- UPDATED SPAWNING (Fix the blind spots) ---
+            if spawn_timer <= 0:
+                spawn_timer = random.randint(20, 40)
+                h_body = pymunk.Body(body_type=pymunk.Body.KINEMATIC)
+                side = random.choice(['top', 'bottom', 'left', 'right'])
+                if side == 'top':
+                    h_body.position = (random.randint(0, WIDTH), -50)
+                    h_body.velocity = (random.randint(-120, 120), random.randint(60, 180))
+                elif side == 'bottom':
+                    h_body.position = (random.randint(0, WIDTH), HEIGHT + 50)
+                    h_body.velocity = (random.randint(-120, 120), random.randint(-180, -60))
+                elif side == 'left':
+                    h_body.position = (-50, random.randint(0, HEIGHT))
+                    h_body.velocity = (random.randint(60, 180), random.randint(-120, 120))
+                else: # Right side
+                    h_body.position = (WIDTH + 50, random.randint(0, HEIGHT))
+                    h_body.velocity = (random.randint(-180, -60), random.randint(-120, 120))
+
+                h_shape = pymunk.Poly.create_box(h_body, (40, 40))
+                s.add(h_body, h_shape)
+                hazards.append(h_shape)
+            spawn_timer -= 1
+
+            s.step(dt)
+            
+            # 7. COLLISIONS & CLEANUP
+            for shape in hazards[:]:
+                shape.body.position += shape.body.velocity * dt
+                if shape.point_query(b.position).distance < 12:
+                    genome.fitness -= 400 
+                    running = False
+                if (shape.body.position.x < -100 or shape.body.position.x > WIDTH+100 or 
+                    shape.body.position.y < -100 or shape.body.position.y > HEIGHT+100):
+                    s.remove(shape.body, shape)
+                    hazards.remove(shape)
+
+def run_training(config_path):
+    config = neat.config.Config(neat.DefaultGenome, neat.DefaultReproduction,
+                                neat.DefaultSpeciesSet, neat.DefaultStagnation,
+                                config_path)
+    p = neat.Population(config)
+    p.add_reporter(neat.StdOutReporter(True))
     
-  return False
-  
-def polyInbounds(shape):#checks if a polygon is out of bounds,but specificly after it was alrdy in the bounds
-   if (shape in shapeDict)==False and IsPolyInBoundaries(shape)==False:
-    shapeDict[shape]=True
-   
-   points = [shape.body.local_to_world(v) for v in shape.get_vertices()]
-   for point in points:
-        if (point[0]>0 and point[0]<800) and (point[1]>0 and point[1]<800):
-          return True
+    winner = p.run(eval_genomes, 100) # Increased generation count
     
-   shapeDict.pop(shape) 
-   return False
-    
+    with open("best_bot_raycast.pkl", "wb") as f:
+        pickle.dump(winner, f)
+    print("\nBest genome saved.")
 
-
-
-#the pygame setup
-dt=1/FPS
-frame=0
-
-#test
-bod, shape = randomPolygon()
-
-s.add(bod,shape)
-shapes.append(shape)
-bodies.append(bod)
-
-
-
-spawnPoly=1#controls when to spawn polygons randomly
-
-#add a handler and a begin function for collisions and handling them 
-
-
-def on_begin(arbiter, space, data):
-   print("hi")
-   return True
-
-
-
-
-
-while running:
-    frame+=1#keep track of the frames
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-
-    screen.fill("purple")
-
-    # step physics
-   
-    s.step(dt)#60 steps per frame
-
-    if spawnPoly==frame:#controls when the polygons are created randomly
-      spawnPoly=random.randint(1,60)+frame
-      bod, shape = randomPolygon()
-
-      s.add(bod,shape)
-      shapes.append(shape)
-      bodies.append(bod)
-
-
-
-    for shape in shapes:
-     
-     points = [shape.body.local_to_world(v) for v in shape.get_vertices()]
-     points = [(int(p.x), int(p.y)) for p in points]
-     pygame.draw.polygon(screen, "red", points)
-     if polyInbounds(shape)==False:
-       s.remove(shape,shape.body)
-       shapes.remove(shape)
-       bodies.remove(shape.body)
-
-
-
-    # draw body
-    pygame.draw.circle(
-        screen,
-        "red",
-        (int(b.position.x), int(b.position.y)),
-        40
-    )
-
-    
-    keys = pygame.key.get_pressed()
-    move = pymunk.Vec2d(0, 0)
-    if keys[pygame.K_w]:
-     move += (0, -300 * dt)
-    if keys[pygame.K_s]:
-     move += (0, 300 * dt)
-    if keys[pygame.K_a]:
-     move += (-300 * dt, 0)
-    if keys[pygame.K_d]:
-     move += (300 * dt, 0)
-
-    b.position += move
-
-
-    pygame.display.flip()
-    clock.tick(FPS)
-
-pygame.quit()
-
+if __name__ == '__main__':
+    local_dir = os.path.dirname(__file__)
+    config_path = os.path.join(local_dir, 'config-feedforward.txt')
+    run_training(config_path)
