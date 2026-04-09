@@ -14,7 +14,7 @@ NUM_RAYS = 8
 SENSE_DIST = 350      # Increased so bot sees danger earlier
 
 def get_inputs(bot_body, bot_vel, hazards, space):
-    # NEW: Boundary Distance Inputs (Normalized 0 to 1)
+    # boundary distance inputs (normalized 0 to 1)
     # 0.0 means touching the wall, 1.0 means at the far opposite side
     dist_left = bot_body.position.x / WIDTH
     dist_right = (WIDTH - bot_body.position.x) / WIDTH
@@ -22,7 +22,7 @@ def get_inputs(bot_body, bot_vel, hazards, space):
     dist_bottom = (HEIGHT - bot_body.position.y) / HEIGHT
     
     wall_data = [dist_left, dist_right, dist_top, dist_bottom]
-    # 1. Raycasting (8 inputs)
+    # 1. raycasting (8 inputs)
     sensors = []
     for i in range(NUM_RAYS):
         angle = (math.pi * 2 / NUM_RAYS) * i
@@ -32,7 +32,7 @@ def get_inputs(bot_body, bot_vel, hazards, space):
         info = space.segment_query_first(start, end, 1, pymunk.ShapeFilter())
         sensors.append(info.alpha if info else 1.0)
     
-    # 2. Sort hazards and prepare relative data
+    # 2. sort hazards and prepare relative data
     hazards.sort(key=lambda h: (h.body.position - bot_body.position).length)
     
     h_data = [0.0] * 8 
@@ -57,14 +57,14 @@ def get_inputs(bot_body, bot_vel, hazards, space):
             # Normalized bot_vel dot relative_pos_to_hazard
             dot_products[i] = bot_vel.normalized().dot(rel.normalized())
 
-    # 4. Cross Product: Are hazards pinning the bot?
+    # 4. cross Product-are hazards pinning the bot?
     if len(rel_vectors) == 2:
         pincer_risk = abs(rel_vectors[0].cross(rel_vectors[1]))
 
     # 5. Normalized Bot Position
     bot_pos_data = [bot_body.position.x / WIDTH, bot_body.position.y / HEIGHT]
 
-    # Total = 8 (rays) + 8 (hazards) + 2 (pos) + 2 (dots) + 1 (cross) = 21
+    # total =4(distance from walls) + 8 (rays) + 8 (hazards) + 2 (pos) + 2 (dots) + 1 (cross,pincer) = 25
     return sensors + h_data + bot_pos_data + dot_products + [pincer_risk]+wall_data
 
 def eval_genomes(genomes, config):
@@ -106,15 +106,14 @@ def eval_genomes(genomes, config):
             inputs = get_inputs(b, current_vel, hazards, s)
             output = net.activate(inputs)
             
-            # 2. DIRECT VELOCITY OUTPUT (2 Outputs: -1 to 1)
-            # Ensure your config has num_outputs = 2
+            # 2. DIRECT VELOCITY OUTPUT (2 outputs from -1 to 1)
             target_vx = output[0] * 450 
             target_vy = output[1] * 450
             new_vel = pymunk.Vec2d(target_vx, target_vy)
             
-            # 3. JITTER PENALTY (Check change in velocity)
+            # 3. JITTER PENALTY (check change in velocity)
             accel = (new_vel - current_vel).length
-            genome.fitness -= (accel / 500) * 0.1 # Punish jerky changes
+            genome.fitness -= (accel / 500) * 0.1 # punish jerky changes
 
             # Update state
             current_vel = pymunk.Vec2d(target_vx, target_vy)
@@ -127,11 +126,11 @@ def eval_genomes(genomes, config):
             # 4. BOUNDARY & CENTER LOGIC
             b.position = (max(20, min(WIDTH-20, b.position.x)), max(20, min(HEIGHT-20, b.position.y)))
             
-            # Survival Base
+            # survival reward
             genome.fitness += 1
 
-            # 1. MOVEMENT REWARD: Reward velocity, but not jitter
-            # This stops it from sitting in the center.
+            # 1. MOVEMENT REWARD: reward velocity, but not jitter
+            # This stops the bot  from sitting in the center.
             if current_vel.length > 50:
                 genome.fitness += 0.2
 
@@ -141,19 +140,19 @@ def eval_genomes(genomes, config):
                 for i, h in enumerate(hazards[:3]): # Check closest 3
                     dist = (h.body.position - b.position).length
                     
-                    # A. The "Hot Stove" Penalty
-                    # If within 100px, lose fitness exponentially
+                    
+                    # if within 120, lose fitness exponentialy by adding up the proximity losses
                     if dist < 120:
-                        # The closer it is, the more fitness we lose
+                        #A. the closer it is, the more fitness we lose
                         proximity_loss = (120 - dist) / 100
                         total_proximity_pressure += proximity_loss
-                        genome.fitness -= total_proximity_pressure * 2.0
+                        genome.fitness -= total_proximity_pressure * 2.0#the more near object there are, the more fitness we lose
 
-                    # B. The Dodge Reward
-                    # Only reward moving away if the object is actually a threat (< 200px)
+                    # B. the dodge reward
+                    # only reward moving away if the object is actually a threat (< 200)
                     if i in prev_dist_to_hazards and dist < 200:
                         if dist > prev_dist_to_hazards[i] + 0.2:
-                            # Big reward for active dodging
+                            # big reward for active dodging
                             genome.fitness += 2
                     
                     prev_dist_to_hazards[i] = dist
